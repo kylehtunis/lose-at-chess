@@ -1,0 +1,26 @@
+<script lang="ts">
+  import { router } from './router.svelte';
+  import Home from './routes/Home.svelte';
+  import Local from './routes/Local.svelte';
+
+  function goHome(event: MouseEvent) {
+    event.preventDefault();
+    router.navigate('/');
+  }
+</script>
+
+<header>
+  <h1><a href="/" onclick={goHome}>Lose at Chess</a></h1>
+  <p class="tagline">
+    Play a normal game for a set number of moves, making the worst moves you can.
+    Then the engine takes over both sides. Whoever's side loses, wins.
+  </p>
+</header>
+
+<main>
+  {#if router.pathname === '/local'}
+    <Local />
+  {:else}
+    <Home />
+  {/if}
+</main>

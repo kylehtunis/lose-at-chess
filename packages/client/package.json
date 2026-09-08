@@ -1,0 +1,24 @@
+{
+  "name": "@lose-at-chess/client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "dependencies": {
+    "@lose-at-chess/protocol": "*",
+    "chess.js": "^1.4.0",
+    "cm-chessboard": "^8.14.0"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.0.0",
+    "@tsconfig/svelte": "^5.0.4",
+    "svelte": "^5.0.0",
+    "svelte-check": "^4.0.0",
+    "vite": "^8.0.0"
+  }
+}
