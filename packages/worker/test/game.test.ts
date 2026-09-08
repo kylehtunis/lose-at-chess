@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { env } from 'cloudflare:test';
+import { env, runDurableObjectAlarm } from 'cloudflare:test';
 import { PROTOCOL_VERSION, type ServerMessage, hashEngineReport } from '@lose-at-chess/protocol';
 
 // A connected client with a queue of received messages.
@@ -19,6 +19,10 @@ class Client {
 
   send(message: unknown) {
     this.ws.send(JSON.stringify(message));
+  }
+
+  close() {
+    this.ws.close();
   }
 
   next(): Promise<ServerMessage> {
@@ -159,7 +163,7 @@ describe('engine-phase verification', () => {
     }
     await white.nextOfType('phase');
     await black.nextOfType('phase');
-    return { white, black };
+    return { stub, white, black };
   }
 
   async function report(moves: string[]) {
@@ -181,6 +185,41 @@ describe('engine-phase verification', () => {
     black.send(await report(['e1f2', 'e8f7', 'd1e1']));
     expect((await white.nextOfType('result')).result).toEqual({ outcome: 'void', reason: 'void' });
     expect((await black.nextOfType('result')).result.outcome).toBe('void');
+  });
+
+  it('accepts a single report once the other player has left and not returned', async () => {
+    const { stub, white, black } = await reachEnginePhase('verifyleftafter');
+    white.send(await report(['e1f2', 'e8f7']));
+    black.close();
+    await white.nextOfType('opponent-status');
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect((await white.nextOfType('result')).result).toEqual(RESULT);
+  });
+
+  it('accepts a report that arrives after the other player has left', async () => {
+    const { stub, white, black } = await reachEnginePhase('verifyleftbefore');
+    black.close();
+    await white.nextOfType('opponent-status');
+    white.send(await report(['e1f2', 'e8f7']));
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect((await white.nextOfType('result')).result).toEqual(RESULT);
+  });
+
+  it('holds the result when the dropped player returns, and settles if they drop again', async () => {
+    const { stub, white, black } = await reachEnginePhase('verifyleftreturns');
+    white.send(await report(['e1f2', 'e8f7']));
+    black.close();
+    expect(await white.next()).toMatchObject({ type: 'opponent-status', connected: false });
+
+    const rejoined = await connect(stub, 'token-b');
+    expect((await rejoined.nextOfType('state')).phase).toBe('engine');
+    expect(await white.next()).toMatchObject({ type: 'opponent-status', connected: true });
+    await runDurableObjectAlarm(stub);
+
+    rejoined.close();
+    expect(await white.next()).toMatchObject({ type: 'opponent-status', connected: false });
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect((await white.nextOfType('result')).result).toEqual(RESULT);
   });
 
   it('rejects a report whose hash does not match its contents', async () => {

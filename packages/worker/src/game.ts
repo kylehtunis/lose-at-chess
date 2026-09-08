@@ -4,6 +4,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { Chess } from 'chess.js';
 import {
+  ENGINE_RECONNECT_GRACE_MS,
   PROTOCOL_VERSION,
   type ClientMessage,
   type Color,
@@ -30,6 +31,9 @@ interface GameRecord {
   result: GameResult | null;
   // Engine-phase reports, one per color, until both are in.
   reports: Partial<Record<Color, EngineReport>>;
+  // When the engine-phase grace period for a dropped opponent expires, or
+  // null if no grace period is running.
+  engineGraceDeadline: number | null;
 }
 
 // Stored on each accepted socket so identity survives hibernation.
@@ -68,6 +72,7 @@ export class Game extends DurableObject<Env> {
         phase: 'waiting',
         result: null,
         reports: {},
+        engineGraceDeadline: null,
       };
       await this.save();
       return new Response(null, { status: 204 });
@@ -107,11 +112,11 @@ export class Game extends DurableObject<Env> {
   }
 
   async webSocketClose(ws: WebSocket) {
-    this.handleDisconnect(ws);
+    await this.handleDisconnect(ws);
   }
 
   async webSocketError(ws: WebSocket) {
-    this.handleDisconnect(ws);
+    await this.handleDisconnect(ws);
   }
 
   // --- Handlers ---
@@ -168,10 +173,7 @@ export class Game extends DurableObject<Env> {
 
     const result = terminalResult(chess);
     if (result) {
-      record.phase = 'complete';
-      record.result = result;
-      this.broadcast({ type: 'phase', phase: 'complete' });
-      this.broadcast({ type: 'result', result });
+      this.completeGame(record, result);
     } else if (setupPhaseIsOver(record.moves.length, record.settings.setupMoves)) {
       record.phase = 'engine';
       this.broadcast({ type: 'phase', phase: 'engine' });
@@ -179,9 +181,8 @@ export class Game extends DurableObject<Env> {
     await this.save();
   }
 
-  // Stores a client's account of the engine phase. Once both players have
-  // reported, matching reports finalize the result and differing ones void
-  // the game.
+  // Stores a client's account of the engine phase, then checks whether the
+  // reports on hand settle the result.
   private async handleEngineResult(ws: WebSocket, report: EngineReport) {
     const record = this.requireRecord();
     const who = ws.deserializeAttachment() as Attachment | null;
@@ -199,30 +200,79 @@ export class Game extends DurableObject<Env> {
       return;
     }
     record.reports[who.color] = { moves: report.moves, result: report.result, hash: report.hash };
-
-    const white = record.reports.w;
-    const black = record.reports.b;
-    if (white && black) {
-      if (white.hash === black.hash) {
-        record.result = white.result;
-      } else {
-        record.result = { outcome: 'void', reason: 'void' };
-        console.error('Engine-phase mismatch', JSON.stringify({ setup: record.moves, white, black }));
-      }
-      record.phase = 'complete';
-      this.broadcast({ type: 'phase', phase: 'complete' });
-      this.broadcast({ type: 'result', result: record.result });
-    }
+    await this.settleEnginePhase(record);
     await this.save();
   }
 
-  private handleDisconnect(ws: WebSocket) {
+  // The alarm is only ever the engine-phase grace period today. The move clock
+  // and the in-game reconnect window will have to share it, taking the
+  // earliest deadline of the three.
+  async alarm() {
+    const record = this.requireRecord();
+    // Clear the deadline before settling, so a player who returns during the
+    // grace period and drops again gets a fresh one.
+    record.engineGraceDeadline = null;
+    await this.settleEnginePhase(record, true);
+    await this.save();
+  }
+
+  // Ends the engine phase once the reports settle it. Two matching reports
+  // give the result and two differing ones void the game. A single report is
+  // enough when the other player has left and has not come back within the
+  // grace period: the engine phase needs no input from either of them, so a
+  // player who closes the window rather than watch it out still gets the
+  // result the remaining client computed.
+  //
+  // Called whenever a report arrives or a socket closes; `graceExpired` marks
+  // the call that comes from the alarm.
+  private async settleEnginePhase(record: GameRecord, graceExpired = false) {
+    if (record.phase !== 'engine') return;
+    const white = record.reports.w;
+    const black = record.reports.b;
+
+    if (white && black) {
+      if (white.hash === black.hash) {
+        this.completeGame(record, white.result);
+      } else {
+        console.error('Engine-phase mismatch', JSON.stringify({ setup: record.moves, white, black }));
+        this.completeGame(record, { outcome: 'void', reason: 'void' });
+      }
+      return;
+    }
+
+    const only = white ?? black;
+    if (!only) return;
+    if (this.isConnected(white ? 'b' : 'w')) return;
+
+    // Wait out a short grace period first, so a dropped connection that comes
+    // straight back still produces a result both clients verified.
+    if (!graceExpired) {
+      if (record.engineGraceDeadline != null) return;
+      record.engineGraceDeadline = Date.now() + ENGINE_RECONNECT_GRACE_MS;
+      await this.ctx.storage.setAlarm(record.engineGraceDeadline);
+      return;
+    }
+    this.completeGame(record, only.result);
+  }
+
+  private completeGame(record: GameRecord, result: GameResult) {
+    record.result = result;
+    record.phase = 'complete';
+    this.broadcast({ type: 'phase', phase: 'complete' });
+    this.broadcast({ type: 'result', result });
+  }
+
+  private async handleDisconnect(ws: WebSocket) {
     const who = ws.deserializeAttachment() as Attachment | null;
     if (!who) return;
     // Another tab for the same player may still be open.
-    if (!this.isConnected(who.color)) {
-      this.broadcastTo(otherColor(who.color), { type: 'opponent-status', connected: false });
-    }
+    if (this.isConnected(who.color)) return;
+    this.broadcastTo(otherColor(who.color), { type: 'opponent-status', connected: false });
+
+    const record = this.requireRecord();
+    if (record.phase !== 'engine') return;
+    await this.settleEnginePhase(record);
+    await this.save();
   }
 
   // --- Seating ---
