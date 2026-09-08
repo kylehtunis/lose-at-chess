@@ -45,11 +45,8 @@ export class OnlineGame extends GameCore {
   // SAN of a move sent but not yet echoed by the server.
   private pendingSan: string | null = null;
 
-  // Debug: report one move fewer than actually played, to exercise the
-  // server's mismatch handling. Temporary until real mismatches can be studied.
   constructor(
     gameId: string,
-    private readonly debugMismatch = false,
   ) {
     super();
     this.phase = 'waiting';
@@ -111,7 +108,7 @@ export class OnlineGame extends GameCore {
   // The result is not final until the server has compared both players'
   // reports, so only report here; `finishGame` runs when `result` arrives.
   protected override onEnginePhaseFinished(result: GameResult) {
-    const moves = this.debugMismatch ? this.engineMoves.slice(0, -1) : [...this.engineMoves];
+    const moves = [...this.engineMoves];
     const gameId = this.gameId;
     void hashEngineReport(moves, result).then((hash) => {
       if (!this.isCurrent(gameId, 'engine')) return;

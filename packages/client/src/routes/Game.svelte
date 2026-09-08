@@ -15,9 +15,8 @@
 
   let { gameId, invite = false }: Props = $props();
 
-  const debugMismatch = new URLSearchParams(location.search).has('debug-mismatch');
   // svelte-ignore state_referenced_locally
-  const game = new OnlineGame(gameId, debugMismatch);
+  const game = new OnlineGame(gameId);
   $effect(() => () => game.disconnect());
 
   // Both players move to the new game once a rematch is accepted.
