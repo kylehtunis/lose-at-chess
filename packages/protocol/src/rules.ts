@@ -41,3 +41,13 @@ export function terminalResult(chess: Chess): GameResult | null {
   if (chess.isDrawByFiftyMoves()) return { outcome: 'draw', reason: 'fifty-moves' };
   return null;
 }
+
+// Uniformly random legal move, played by the server when a clock expires.
+// Returns null only if the side to move has no legal moves.
+export function randomLegalMove(chess: Chess): MoveRecord | null {
+  const legal = chess.moves({ verbose: true });
+  const pick = legal[Math.floor(Math.random() * legal.length)];
+  if (!pick) return null;
+  const move = tryMove(chess, pick.from, pick.to, pick.promotion);
+  return move && { ...move, timeout: true };
+}

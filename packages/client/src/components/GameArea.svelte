@@ -4,6 +4,7 @@
   import type { GameCore } from '../game/state.svelte';
   import { colorName } from '../game/rules';
   import Board from './Board.svelte';
+  import Clock from './Clock.svelte';
   import EvalBar from './EvalBar.svelte';
   import EvalTimeline from './EvalTimeline.svelte';
   import MoveHistory from './MoveHistory.svelte';
@@ -17,12 +18,13 @@
     // viewer's own color so they always look at the board from their side.
     orientation?: Color;
     onMove: (from: string, to: string) => boolean;
-    onPlayAgain: () => void;
+    // Buttons shown on the result overlay: play again, rematch, and so on.
+    resultActions: Snippet;
     // Extra text for the info bar, e.g. which side you are online.
     status?: Snippet;
   }
 
-  let { game, canMove, orientation = 'w', onMove, onPlayAgain, status }: Props = $props();
+  let { game, canMove, orientation = 'w', onMove, resultActions, status }: Props = $props();
 
   const reviewing = $derived(game.phase === 'complete');
 
@@ -69,6 +71,9 @@
     <span class="phase">{infoBar.phase}</span>
     <span>{infoBar.counter}</span>
     <span>{infoBar.turn}</span>
+    {#if game.clockDeadline}
+      <Clock color={game.clockDeadline.color} deadline={game.clockDeadline.deadline} />
+    {/if}
     {#if status}
       <span class="status">{@render status()}</span>
     {/if}
@@ -79,7 +84,8 @@
     {/if}
     <Board
       fen={game.displayFen}
-      interactive={game.phase === 'setup' && canMove}
+      interactive={game.phase === 'setup'}
+      {canMove}
       turn={game.turn}
       {orientation}
       animate={!reviewing}
@@ -88,6 +94,7 @@
     <MoveHistory
       history={game.history}
       enginePhaseStartPly={game.enginePhaseStartPly}
+      timeoutPlies={game.timeoutPlies}
       reviewable={reviewing}
       viewPly={game.viewPly}
       onSelect={(ply) => game.navigateTo(ply)}
@@ -108,15 +115,16 @@
     title={game.resultText.title}
     detail={game.resultText.detail}
     onDismiss={() => game.dismissResult()}
-    {onPlayAgain}
+    actions={resultActions}
   />
 {/if}
 
 <style>
   .info-bar {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
-    gap: 1rem;
+    gap: 0.5rem 1rem;
     padding: 0.5rem 0.75rem;
     margin-bottom: 0.75rem;
     background: var(--panel);

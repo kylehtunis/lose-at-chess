@@ -2,13 +2,17 @@
   interface Props {
     history: string[];
     enginePhaseStartPly: number | null;
+    // Plies the server played automatically because a clock ran out.
+    timeoutPlies?: number[];
     // When true, moves are clickable and the viewed ply is highlighted.
     reviewable: boolean;
     viewPly: number | null;
     onSelect: (ply: number) => void;
   }
 
-  let { history, enginePhaseStartPly, reviewable, viewPly, onSelect }: Props = $props();
+  let { history, enginePhaseStartPly, timeoutPlies = [], reviewable, viewPly, onSelect }: Props = $props();
+
+  const TIMEOUT_TITLE = 'Played automatically: the clock ran out';
 
   let panel: HTMLElement;
 
@@ -39,16 +43,20 @@
 </script>
 
 {#snippet move(entry: { san: string; ply: number })}
+  {@const timedOut = timeoutPlies.includes(entry.ply)}
   {#if reviewable}
     <button
       type="button"
       class="san clickable"
       class:active={entry.ply === viewPly}
+      class:timeout={timedOut}
       data-ply={entry.ply}
+      title={timedOut ? TIMEOUT_TITLE : undefined}
       onclick={() => onSelect(entry.ply)}
-    >{entry.san}</button>
+    >{entry.san}{#if timedOut}<span class="timeout-mark" aria-label="timeout">⏱</span>{/if}</button>
   {:else}
-    <span class="san" data-ply={entry.ply}>{entry.san}</span>
+    <span class="san" class:timeout={timedOut} data-ply={entry.ply} title={timedOut ? TIMEOUT_TITLE : undefined}
+    >{entry.san}{#if timedOut}<span class="timeout-mark" aria-label="timeout">⏱</span>{/if}</span>
   {/if}
 {/snippet}
 
@@ -112,9 +120,17 @@
   .san.clickable { cursor: pointer; }
   .san.clickable:hover { background: rgba(255, 255, 255, 0.1); }
 
+  .san.timeout { color: #f28b82; }
+
+  /* After .timeout so the highlight keeps readable text on a timed-out move. */
   .san.active {
     background: var(--accent);
     color: #1a1a1a;
+  }
+
+  .timeout-mark {
+    margin-left: 0.15rem;
+    font-size: 0.75em;
   }
 
   li.divider {

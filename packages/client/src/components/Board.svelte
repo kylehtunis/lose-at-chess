@@ -6,16 +6,20 @@
 
   interface Props {
     fen: string;
-    // Whether pieces can be moved at all. Only `turn`'s pieces may be picked up.
+    // Whether move input is armed at all. Keep this stable for a whole phase:
+    // toggling it per turn re-arms cm-chessboard mid-animation and drops moves.
     interactive: boolean;
+    // Only `turn`'s pieces may be picked up, and only when `canMove` holds
+    // (online, that means it is this player's side to move).
     turn: Color;
+    canMove?: boolean;
     // Which side sits at the bottom of the board.
     orientation?: Color;
     animate?: boolean;
     onMove: (from: string, to: string) => boolean;
   }
 
-  let { fen, interactive, turn, orientation = 'w', animate = true, onMove }: Props = $props();
+  let { fen, interactive, turn, canMove = true, orientation = 'w', animate = true, onMove }: Props = $props();
 
   let container: HTMLDivElement;
   let board = $state.raw<Chessboard | null>(null);
@@ -47,7 +51,7 @@
   function handleInput(event: MoveInputEvent): boolean {
     if (event.type === INPUT_EVENT_TYPE.moveInputStarted) {
       // Piece names are color-prefixed, e.g. "wp".
-      return event.piece?.charAt(0) === turn;
+      return canMove && event.piece?.charAt(0) === turn;
     }
     if (event.type === INPUT_EVENT_TYPE.validateMoveInput) {
       return onMove(event.squareFrom, event.squareTo ?? '');

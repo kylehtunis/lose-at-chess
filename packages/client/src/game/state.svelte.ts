@@ -48,6 +48,10 @@ export class GameCore {
   timelineProgress = $state('');
   result = $state<GameResult | null>(null);
   resultVisible = $state(false);
+  // Move clock for the side to move, as an absolute time. Online timed games only.
+  clockDeadline = $state<{ color: Color; deadline: number } | null>(null);
+  // Plies (1-based) the server played because a clock ran out.
+  timeoutPlies = $state<number[]>([]);
 
   protected chess = new Chess();
   protected engine = new Engine();
@@ -65,7 +69,7 @@ export class GameCore {
 
   showEvalBar = $derived(this.phase === 'engine' || this.phase === 'complete');
 
-  resultText = $derived(this.result ? resultText(this.result) : null);
+  resultText = $derived(this.result ? resultText(this.result, this.viewer()) : null);
 
   currentEval = $derived.by((): Eval | null => {
     const lastEngineEval = this.engineEvals.at(-1) ?? ZERO_EVAL;
@@ -95,6 +99,12 @@ export class GameCore {
 
   // --- For subclasses ---
 
+  // The color this screen belongs to, if it belongs to one player. Online
+  // games use it to phrase the result as a win or loss for the viewer.
+  protected viewer(): Color | null {
+    return null;
+  }
+
   // Clears everything for a fresh game. The caller sets the phase.
   protected startPosition(settings: GameSettings) {
     this.gameId += 1;
@@ -110,6 +120,8 @@ export class GameCore {
     this.timelineProgress = '';
     this.result = null;
     this.resultVisible = false;
+    this.clockDeadline = null;
+    this.timeoutPlies = [];
     this.syncFromChess();
   }
 
@@ -153,6 +165,7 @@ export class GameCore {
   protected finishGame(result: GameResult) {
     this.phase = 'complete';
     this.result = result;
+    this.clockDeadline = null;
     this.allFens = buildAllFens(this.history);
     this.viewPly = this.allFens.length - 1;
     this.resultVisible = true;

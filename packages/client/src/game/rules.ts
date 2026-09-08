@@ -25,15 +25,19 @@ const DRAW_DETAILS: Record<string, string> = {
   'fifty-moves': 'Draw by the fifty-move rule.',
 };
 
-export function resultText(result: GameResult): { title: string; detail: string } {
+// Describes a result for the overlay. With a `viewer`, wins and losses are
+// phrased from that player's side.
+export function resultText(result: GameResult, viewer: Color | null = null): { title: string; detail: string } {
+  const winTitle = (winner: Color) =>
+    viewer === null ? `${colorName(winner)} wins!` : viewer === winner ? 'You win!' : 'You lose';
   switch (result.outcome) {
     case 'checkmate': {
       const name = colorName(result.winner!);
-      return { title: `${name} wins!`, detail: `${name} was checkmated, which is exactly what they wanted.` };
+      return { title: winTitle(result.winner!), detail: `${name} was checkmated, which is exactly what they wanted.` };
     }
     case 'forfeit': {
-      const name = colorName(result.winner!);
-      return { title: `${name} wins!`, detail: 'The opponent left the game.' };
+      const loser = result.winner === 'w' ? 'b' : 'w';
+      return { title: winTitle(result.winner!), detail: `${colorName(loser)} left the game and forfeited.` };
     }
     case 'void':
       return { title: 'No result', detail: 'The result could not be verified.' };
