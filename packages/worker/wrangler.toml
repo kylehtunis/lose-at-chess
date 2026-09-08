@@ -1,0 +1,20 @@
+name = "lose-at-chess"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+
+# The client build is served as static assets from the same origin. Only the
+# listed routes reach the Worker; everything else is served directly.
+[assets]
+directory = "../client/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/ws/*", "/api/*"]
+
+[durable_objects]
+bindings = [
+  { name = "GAME", class_name = "Game" },
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Game"]

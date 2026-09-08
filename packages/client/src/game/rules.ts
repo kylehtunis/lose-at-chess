@@ -1,20 +1,10 @@
 import { Chess } from 'chess.js';
-
-export type Color = 'w' | 'b';
+import type { Color, GameResult } from '@lose-at-chess/protocol';
 
 export const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
 export function colorName(color: Color): string {
   return color === 'w' ? 'White' : 'Black';
-}
-
-export function setupMovesRemaining(history: string[], color: Color, setupMovesPerSide: number): number {
-  const played = history.filter((_, i) => (i % 2 === 0 ? 'w' : 'b') === color).length;
-  return Math.max(0, setupMovesPerSide - played);
-}
-
-export function setupPhaseIsOver(history: string[], setupMovesPerSide: number): boolean {
-  return history.length >= setupMovesPerSide * 2;
 }
 
 // FEN after each ply, index 0 being the start position.
@@ -28,29 +18,26 @@ export function buildAllFens(history: string[]): string[] {
   return fens;
 }
 
-export interface GameResult {
-  outcome: 'checkmate' | 'draw';
-  // The side that got checkmated, which is the side whose player wins.
-  checkmated?: Color;
-  title: string;
-  detail: string;
-}
+const DRAW_DETAILS: Record<string, string> = {
+  stalemate: 'Stalemate. Nobody managed to lose.',
+  repetition: 'Draw by threefold repetition.',
+  'insufficient-material': 'Draw by insufficient material.',
+  'fifty-moves': 'Draw by the fifty-move rule.',
+};
 
-export function describeResult(chess: Chess): GameResult {
-  if (chess.isCheckmate()) {
-    const checkmated = chess.turn();
-    const name = colorName(checkmated);
-    return {
-      outcome: 'checkmate',
-      checkmated,
-      title: `${name} wins!`,
-      detail: `${name} was checkmated, which is exactly what they wanted.`,
-    };
+export function resultText(result: GameResult): { title: string; detail: string } {
+  switch (result.outcome) {
+    case 'checkmate': {
+      const name = colorName(result.winner!);
+      return { title: `${name} wins!`, detail: `${name} was checkmated, which is exactly what they wanted.` };
+    }
+    case 'forfeit': {
+      const name = colorName(result.winner!);
+      return { title: `${name} wins!`, detail: 'The opponent left the game.' };
+    }
+    case 'void':
+      return { title: 'No result', detail: 'The result could not be verified.' };
+    case 'draw':
+      return { title: 'Draw', detail: DRAW_DETAILS[result.reason] ?? 'The game is a draw.' };
   }
-  let detail = 'The game is a draw.';
-  if (chess.isStalemate()) detail = 'Stalemate. Nobody managed to lose.';
-  else if (chess.isThreefoldRepetition()) detail = 'Draw by threefold repetition.';
-  else if (chess.isInsufficientMaterial()) detail = 'Draw by insufficient material.';
-  else if (chess.isDrawByFiftyMoves()) detail = 'Draw by the fifty-move rule.';
-  return { outcome: 'draw', title: 'Draw', detail };
 }

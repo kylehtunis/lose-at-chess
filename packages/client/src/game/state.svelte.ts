@@ -1,20 +1,24 @@
-// Reactive state for a game played on one screen. Both players share the board
-// during the setup phase, then the engine plays both sides locally.
+// Reactive game state shared by local and online play. Subclasses decide
+// where setup moves come from and when phases change; this class owns the
+// position, the engine phase, and post-game review.
 import { Chess } from 'chess.js';
-import type { SetupMoves } from '@lose-at-chess/protocol';
-import { Engine } from './engine';
-import { type Eval, normalizeEvalToWhite, sideToMoveFromFen } from './eval';
 import {
+  DEFAULT_SETTINGS,
   type Color,
   type GameResult,
-  START_FEN,
-  buildAllFens,
-  describeResult,
+  type GameSettings,
+  type MoveRecord,
+  type Phase as ServerPhase,
   setupMovesRemaining,
-  setupPhaseIsOver,
-} from './rules';
+  terminalResult,
+  tryMove,
+} from '@lose-at-chess/protocol';
+import { Engine } from './engine';
+import { type Eval, normalizeEvalToWhite, sideToMoveFromFen } from './eval';
+import { START_FEN, buildAllFens, resultText } from './rules';
 
-export type Phase = 'config' | 'setup' | 'engine' | 'complete';
+// `config` exists only on the client, before a game is created.
+export type Phase = 'config' | ServerPhase;
 
 const ENGINE_MOVE_DELAY_MS = 100;
 const ZERO_EVAL: Eval = { type: 'cp', value: 0 };
@@ -23,15 +27,19 @@ function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export class LocalGame {
+export class GameCore {
   phase = $state<Phase>('config');
-  setupMovesPerSide = $state<SetupMoves>(10);
+  settings = $state<GameSettings>(DEFAULT_SETTINGS);
   history = $state<string[]>([]);
   fen = $state(START_FEN);
   turn = $state<Color>('w');
   enginePhaseStartPly = $state<number | null>(null);
   // One eval per engine move, White's perspective.
   engineEvals = $state<(Eval | null)[]>([]);
+  // Engine moves in UCI, the basis of the online verification report.
+  engineMoves = $state<string[]>([]);
+  // The local engine playout has reached a terminal position.
+  engineDone = $state(false);
   // Post-game review: every position and the ply currently shown.
   allFens = $state<string[]>([]);
   viewPly = $state<number | null>(null);
@@ -41,10 +49,10 @@ export class LocalGame {
   result = $state<GameResult | null>(null);
   resultVisible = $state(false);
 
-  private chess = new Chess();
-  private engine = new Engine();
+  protected chess = new Chess();
+  protected engine = new Engine();
   // Bumped on every start and reset so stale async engine work is discarded.
-  private gameId = 0;
+  protected gameId = 0;
 
   displayFen = $derived(
     this.phase === 'complete' && this.viewPly !== null
@@ -52,10 +60,12 @@ export class LocalGame {
       : this.fen,
   );
 
-  whiteRemaining = $derived(setupMovesRemaining(this.history, 'w', this.setupMovesPerSide));
-  blackRemaining = $derived(setupMovesRemaining(this.history, 'b', this.setupMovesPerSide));
+  whiteRemaining = $derived(setupMovesRemaining(this.history.length, 'w', this.settings.setupMoves));
+  blackRemaining = $derived(setupMovesRemaining(this.history.length, 'b', this.settings.setupMoves));
 
   showEvalBar = $derived(this.phase === 'engine' || this.phase === 'complete');
+
+  resultText = $derived(this.result ? resultText(this.result) : null);
 
   currentEval = $derived.by((): Eval | null => {
     const lastEngineEval = this.engineEvals.at(-1) ?? ZERO_EVAL;
@@ -66,40 +76,11 @@ export class LocalGame {
     return this.timelineEvals[this.viewPly - 1] ?? lastEngineEval;
   });
 
-  start(setupMoves: SetupMoves) {
-    this.gameId += 1;
-    this.chess.reset();
-    this.setupMovesPerSide = setupMoves;
-    this.enginePhaseStartPly = null;
-    this.engineEvals = [];
-    this.allFens = [];
-    this.viewPly = null;
-    this.timelineEvals = null;
-    this.timelineProgress = '';
-    this.result = null;
-    this.resultVisible = false;
-    this.phase = 'setup';
-    this.syncFromChess();
-  }
-
   reset() {
     this.engine.stop();
     this.gameId += 1;
     this.phase = 'config';
     this.resultVisible = false;
-  }
-
-  // Setup-phase move from the board. Returns whether the move was legal.
-  tryMove(from: string, to: string): boolean {
-    if (this.phase !== 'setup') return false;
-    try {
-      this.chess.move({ from, to, promotion: 'q' });
-    } catch {
-      return false;
-    }
-    this.syncFromChess();
-    this.afterMove();
-    return true;
   }
 
   dismissResult() {
@@ -112,26 +93,82 @@ export class LocalGame {
     this.viewPly = Math.max(0, Math.min(ply, maxPly));
   }
 
-  private isCurrent(gameId: number, phase: Phase) {
+  // --- For subclasses ---
+
+  // Clears everything for a fresh game. The caller sets the phase.
+  protected startPosition(settings: GameSettings) {
+    this.gameId += 1;
+    this.chess.reset();
+    this.settings = settings;
+    this.enginePhaseStartPly = null;
+    this.engineEvals = [];
+    this.engineMoves = [];
+    this.engineDone = false;
+    this.allFens = [];
+    this.viewPly = null;
+    this.timelineEvals = null;
+    this.timelineProgress = '';
+    this.result = null;
+    this.resultVisible = false;
+    this.syncFromChess();
+  }
+
+  // Applies a setup-phase move if legal. Returns its record, or null.
+  protected applyMove(from: string, to: string, promotion?: string): MoveRecord | null {
+    if (this.phase !== 'setup') return null;
+    const move = tryMove(this.chess, from, to, promotion);
+    if (move) this.syncFromChess();
+    return move;
+  }
+
+  protected applySan(san: string) {
+    this.chess.move(san);
+    this.syncFromChess();
+  }
+
+  protected replaceMoves(moves: MoveRecord[]) {
+    this.chess.reset();
+    for (const move of moves) this.chess.move(move.san);
+    this.syncFromChess();
+  }
+
+  protected currentResult(): GameResult | null {
+    return terminalResult(this.chess);
+  }
+
+  protected beginEnginePhase() {
+    this.phase = 'engine';
+    this.enginePhaseStartPly = this.history.length;
+    this.engineEvals = [];
+    this.engineMoves = [];
+    this.engineDone = false;
+    void this.runEnginePhase();
+  }
+
+  // Called when the engine phase reaches a terminal position.
+  protected onEnginePhaseFinished(result: GameResult) {
+    this.finishGame(result);
+  }
+
+  protected finishGame(result: GameResult) {
+    this.phase = 'complete';
+    this.result = result;
+    this.allFens = buildAllFens(this.history);
+    this.viewPly = this.allFens.length - 1;
+    this.resultVisible = true;
+    void this.buildEvalTimeline();
+  }
+
+  protected isCurrent(gameId: number, phase: Phase) {
     return gameId === this.gameId && this.phase === phase;
   }
+
+  // --- Internals ---
 
   private syncFromChess() {
     this.history = this.chess.history();
     this.fen = this.chess.fen();
     this.turn = this.chess.turn();
-  }
-
-  private afterMove() {
-    if (this.chess.isGameOver()) {
-      void this.finishGame();
-      return;
-    }
-    if (this.phase === 'setup' && setupPhaseIsOver(this.history, this.setupMovesPerSide)) {
-      this.phase = 'engine';
-      this.enginePhaseStartPly = this.history.length;
-      void this.runEnginePhase();
-    }
   }
 
   private async runEnginePhase() {
@@ -143,7 +180,12 @@ export class LocalGame {
       const search = await this.engine.bestMove(this.chess.fen());
       if (!this.isCurrent(gameId, 'engine')) return;
       this.applyUciMove(search.move, search.eval);
-      this.afterMove();
+      const result = this.currentResult();
+      if (result) {
+        this.engineDone = true;
+        this.onEnginePhaseFinished(result);
+        return;
+      }
     }
   }
 
@@ -162,15 +204,7 @@ export class LocalGame {
     }
     this.syncFromChess();
     this.engineEvals.push(normalizeEvalToWhite(ev, mover));
-  }
-
-  private async finishGame() {
-    this.phase = 'complete';
-    this.allFens = buildAllFens(this.history);
-    this.viewPly = this.allFens.length - 1;
-    this.result = describeResult(this.chess);
-    this.resultVisible = true;
-    await this.buildEvalTimeline();
+    this.engineMoves.push(uci);
   }
 
   // Evaluates every position so the timeline covers the setup phase too.
@@ -196,5 +230,24 @@ export class LocalGame {
 
     this.timelineEvals = evals;
     this.timelineProgress = '';
+  }
+}
+
+// Both players share one screen; phases advance as soon as the rules say so.
+export class LocalGame extends GameCore {
+  start(settings: GameSettings) {
+    this.startPosition(settings);
+    this.phase = 'setup';
+  }
+
+  tryMove(from: string, to: string): boolean {
+    if (!this.applyMove(from, to)) return false;
+    const result = this.currentResult();
+    if (result) {
+      this.finishGame(result);
+    } else if (this.whiteRemaining === 0 && this.blackRemaining === 0) {
+      this.beginEnginePhase();
+    }
+    return true;
   }
 }

@@ -2,6 +2,9 @@
   import { router } from './router.svelte';
   import Home from './routes/Home.svelte';
   import Local from './routes/Local.svelte';
+  import Game from './routes/Game.svelte';
+
+  const gameId = $derived(router.pathname.match(/^\/game\/([a-z0-9]+)$/)?.[1] ?? null);
 
   function goHome(event: MouseEvent) {
     event.preventDefault();
@@ -18,7 +21,11 @@
 </header>
 
 <main>
-  {#if router.pathname === '/local'}
+  {#if gameId}
+    {#key gameId}
+      <Game {gameId} />
+    {/key}
+  {:else if router.pathname === '/local'}
     <Local />
   {:else}
     <Home />

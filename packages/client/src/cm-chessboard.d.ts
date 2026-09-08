@@ -34,6 +34,8 @@ declare module 'cm-chessboard' {
     constructor(element: HTMLElement, props?: ChessboardProps);
     setPosition(fen: string, animated?: boolean): Promise<void>;
     getPosition(): string;
+    setOrientation(color: 'w' | 'b', animated?: boolean): Promise<void>;
+    getOrientation(): 'w' | 'b';
     enableMoveInput(handler: (event: MoveInputEvent) => boolean | void, color?: 'w' | 'b'): void;
     disableMoveInput(): void;
     destroy(): void;

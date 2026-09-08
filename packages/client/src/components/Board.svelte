@@ -2,27 +2,30 @@
   import { untrack } from 'svelte';
   import { Chessboard, INPUT_EVENT_TYPE, type MoveInputEvent } from 'cm-chessboard';
   import piecesUrl from 'cm-chessboard/assets/pieces/standard.svg?url';
-  import type { Color } from '../game/rules';
+  import type { Color } from '@lose-at-chess/protocol';
 
   interface Props {
     fen: string;
     // Whether pieces can be moved at all. Only `turn`'s pieces may be picked up.
     interactive: boolean;
     turn: Color;
+    // Which side sits at the bottom of the board.
+    orientation?: Color;
     animate?: boolean;
     onMove: (from: string, to: string) => boolean;
   }
 
-  let { fen, interactive, turn, animate = true, onMove }: Props = $props();
+  let { fen, interactive, turn, orientation = 'w', animate = true, onMove }: Props = $props();
 
   let container: HTMLDivElement;
   let board = $state.raw<Chessboard | null>(null);
 
-  // Created once; the initial FEN is read untracked so later moves update the
-  // existing board instead of rebuilding it.
+  // Created once; the initial FEN and orientation are read untracked so later
+  // changes update the existing board instead of rebuilding it.
   $effect(() => {
     const created = new Chessboard(container, {
       position: untrack(() => fen),
+      orientation: untrack(() => orientation),
       assetsUrl: '/',
       style: { pieces: { file: piecesUrl }, showCoordinates: true },
     });
@@ -35,6 +38,10 @@
 
   $effect(() => {
     void board?.setPosition(fen, animate);
+  });
+
+  $effect(() => {
+    void board?.setOrientation(orientation, false);
   });
 
   function handleInput(event: MoveInputEvent): boolean {
